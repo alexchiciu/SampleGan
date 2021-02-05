@@ -3,29 +3,57 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class DiscriminatorBuilder():
-    
-    def __init__(self):
-        pass
 
-    def getModel(self):
-        return Net()
+class ConfigNet(nn.Module):
+    def __init__(self, config):
+        """
+        Build net with parameters from the config
+        parameters. Most changed ones are conv layers,
+        linear layers, output features
+        """
+        numChannels = config['channels']
+        useBias = config['bias']
+        kernelSize = config['kernel_size']
+        padding = config['padding']
+        convLayers = config['conv_layers']
+        linearLayers = config['linear_layers']
+        outputFeatures = config['output_features']
+        stride = config['stride']
+        numFeatures  = config['l1']
 
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv3d(1, 10, kernel_size=3)
-        self.conv2 = nn.Conv3d(10, 20, kernel_size=3)
-        self.conv2_drop = nn.Dropout3d()
-        self.fc1 = nn.Linear(540, 100)
-        self.fc2 = nn.Linear(100, 2)
+        norm_layer = nn.BatchNorm3d     
+        
+        super(ConfigNet, self).__init__()
+        sequence = [nn.Conv3d(numChannels, outputFeatures, kernel_size=kernelSize, stride=stride, padding=padding),nn.MaxPool3d(2), nn.ReLU()]
+        
+        prevFeatures = outputFeatures
+
+        for i in range(1, convLayers):
+            outputFeatures*=2
+            if i == 1:
+                sequence+= [nn.Conv3d(prevFeatures, outputFeatures, kernel_size=kernelSize, stride=stride, padding=padding), nn.MaxPool3d(2), nn.ReLU()]
+            else:
+                sequence+= [nn.Conv3d(prevFeatures, outputFeatures, kernel_size=kernelSize, stride=stride, padding=padding), nn.ReLU()]
+
+            prevFeatures = outputFeatures
+
+        self.totalLinearFeatures = outputFeatures * 5 * 5 * 5
+        self.sequence = nn.Sequential(*sequence)
+
+        self.linearLayer = [nn.Linear(self.totalLinearFeatures, numFeatures), nn.ReLU()]
+        prevFeatures = numFeatures
+        for i in range(1, linearLayers):
+            numFeatures*=.5
+            numFeatures = int(numFeatures)
+            self.linearLayer += [nn.Linear(prevFeatures, numFeatures), nn.ReLU()]
+            prevFeatures = numFeatures
+
+        self.linearLayer += [nn.Linear(prevFeatures, 2)]
+        self.linearLayer = nn.Sequential(*self.linearLayer)
+
 
     def forward(self, x):
-        x = F.relu(F.max_pool3d(self.conv1(x), 2))
-        x = F.relu(F.max_pool3d(self.conv2_drop(self.conv2(x)), 2))
-        print(x.shape)
-        x = x.view(-1, 540)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
+        x = self.sequence(x)
+        x = x.view(-1, self.totalLinearFeatures)
+        x = self.linearLayer(x)
         return F.log_softmax(x, dim=1)
